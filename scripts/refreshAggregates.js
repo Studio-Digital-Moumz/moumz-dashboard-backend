@@ -76,4 +76,5 @@ async function refreshStats() {
   console.log("✅ Toutes les agrégations sont à jour");
 }
 
-refreshStats();
+// 👉 Voici la ligne qu’il te manquait :
+export default refreshStats;
