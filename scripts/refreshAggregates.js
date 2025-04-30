@@ -2,6 +2,8 @@ import { createClient } from "@supabase/supabase-js";
 import dotenv from "dotenv";
 dotenv.config();
 
+console.log("🔁 Démarrage du script refreshAggregates.js");
+
 const supabase = createClient(
   process.env.SUPABASE_URL,
   process.env.SUPABASE_SERVICE_ROLE
@@ -61,6 +63,8 @@ function avg(arr) {
 }
 
 export default async function refreshAggregates() {
+  console.log("🧠 Lancement des agrégations Supabase...");
+
   const { data, error } = await supabase
     .from("ga4_snapshots")
     .select("*")
@@ -88,5 +92,5 @@ export default async function refreshAggregates() {
     }
   }
 
-  console.log("✅ Agrégations terminées");
+  console.log("✅ Toutes les agrégations sont à jour !");
 }
