@@ -1,4 +1,3 @@
-console.log("Hello depuis Moumz GA4 🎉");
 import { BetaAnalyticsDataClient } from "@google-analytics/data";
 import { createClient } from "@supabase/supabase-js";
 import dotenv from "dotenv";
@@ -15,7 +14,12 @@ const supabase = createClient(
 
 async function collect() {
   const { data: sites, error } = await supabase.from("sites").select("*");
-  if (error) throw error;
+  if (error) {
+    console.error("❌ Erreur récupération sites :", error.message);
+    return;
+  }
+
+  console.log(`📌 ${sites.length} site(s) à analyser`);
 
   for (const site of sites) {
     try {
@@ -29,17 +33,30 @@ async function collect() {
         ],
       });
 
-      await supabase.from("ga4_snapshots").insert({
+      const dataToInsert = {
         site_id: site.id,
         snapshot_date: new Date().toISOString().slice(0, 10),
         active_users: parseInt(res.rows?.[0]?.metricValues?.[0]?.value ?? 0),
         sessions: parseInt(res.rows?.[0]?.metricValues?.[1]?.value ?? 0),
         pageviews: parseInt(res.rows?.[0]?.metricValues?.[2]?.value ?? 0),
-      });
+      };
 
-      console.log(`✅ Stats enregistrées pour ${site.name}`);
+      console.log("📦 Données envoyées à Supabase :", dataToInsert);
+
+      const { error: insertError } = await supabase
+        .from("ga4_snapshots")
+        .insert(dataToInsert);
+
+      if (insertError) {
+        console.error(
+          "❌ Erreur lors de l’insertion Supabase :",
+          insertError.message
+        );
+      } else {
+        console.log(`✅ Stats enregistrées pour ${site.name}`);
+      }
     } catch (err) {
-      console.error(`❌ Erreur pour ${site.name} :`, err.message);
+      console.error(`❌ Erreur GA4 pour ${site.name} :`, err.message);
     }
   }
 }
