@@ -106,7 +106,9 @@ async function collect() {
 
       const { error: insertError } = await supabase
         .from("ga4_snapshots")
-        .upsert(dataToInsert, { onConflict: ["site_id", "snapshot_date"] });
+        .upsert(dataToInsert, {
+          onConflict: ["site_id", "snapshot_date", "scope"],
+        });
 
       if (insertError) {
         console.error(
