@@ -12,6 +12,20 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_ROLE
 );
 
+// Récupère la valeur dominante d'une dimension (ex : top device, top country)
+async function getTopValue(propertyId, dimensionName) {
+  const [res] = await analyticsDataClient.runReport({
+    property: `properties/${propertyId}`,
+    dateRanges: [{ startDate: "1daysAgo", endDate: "today" }],
+    dimensions: [{ name: dimensionName }],
+    metrics: [{ name: "sessions" }],
+    limit: 1,
+    orderBys: [{ metric: { metricName: "sessions" }, desc: true }],
+  });
+
+  return res.rows?.[0]?.dimensionValues?.[0]?.value ?? null;
+}
+
 async function collect() {
   const { data: sites, error } = await supabase.from("sites").select("*");
   if (error) {
@@ -23,6 +37,7 @@ async function collect() {
 
   for (const site of sites) {
     try {
+      // Récupération des statistiques principales
       const [res] = await analyticsDataClient.runReport({
         property: `properties/${site.ga4_property_id}`,
         dateRanges: [{ startDate: "1daysAgo", endDate: "today" }],
@@ -30,22 +45,44 @@ async function collect() {
           { name: "activeUsers" },
           { name: "sessions" },
           { name: "screenPageViews" },
+          { name: "averageSessionDuration" },
+          { name: "engagementRate" },
         ],
       });
+
+      const rows = res.rows?.[0]?.metricValues ?? [];
+      const activeUsers = parseInt(rows[0]?.value ?? 0);
+      const sessions = parseInt(rows[1]?.value ?? 0);
+      const pageviews = parseInt(rows[2]?.value ?? 0);
+      const avgSessionDuration = parseFloat(rows[3]?.value ?? 0);
+      const engagementRate = parseFloat(rows[4]?.value ?? 0);
+      const bounceRate = 1 - engagementRate;
+
+      // Récupération des dimensions secondaires
+      const topDevice = await getTopValue(
+        site.ga4_property_id,
+        "deviceCategory"
+      );
+      const topCountry = await getTopValue(site.ga4_property_id, "country");
 
       const dataToInsert = {
         site_id: site.id,
         snapshot_date: new Date().toISOString().slice(0, 10),
-        active_users: parseInt(res.rows?.[0]?.metricValues?.[0]?.value ?? 0),
-        sessions: parseInt(res.rows?.[0]?.metricValues?.[1]?.value ?? 0),
-        pageviews: parseInt(res.rows?.[0]?.metricValues?.[2]?.value ?? 0),
+        active_users: activeUsers,
+        sessions,
+        pageviews,
+        avg_session_duration: avgSessionDuration,
+        engagement_rate: engagementRate,
+        bounce_rate: bounceRate,
+        top_device: topDevice,
+        top_country: topCountry,
       };
 
       console.log("📦 Données envoyées à Supabase :", dataToInsert);
 
       const { error: insertError } = await supabase
         .from("ga4_snapshots")
-        .insert(dataToInsert);
+        .upsert(dataToInsert, { onConflict: ["site_id", "snapshot_date"] });
 
       if (insertError) {
         console.error(
