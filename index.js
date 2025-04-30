@@ -12,7 +12,7 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_ROLE
 );
 
-// Récupère la valeur dominante d'une dimension (ex : top device, top country)
+// Fonction pour récupérer le top d'une dimension (device, country...)
 async function getTopValue(propertyId, dimensionName) {
   const [res] = await analyticsDataClient.runReport({
     property: `properties/${propertyId}`,
@@ -26,6 +26,7 @@ async function getTopValue(propertyId, dimensionName) {
   return res.rows?.[0]?.dimensionValues?.[0]?.value ?? null;
 }
 
+// Fonction principale
 async function collect() {
   const { data: sites, error } = await supabase.from("sites").select("*");
   if (error) {
@@ -37,7 +38,7 @@ async function collect() {
 
   for (const site of sites) {
     try {
-      // Récupération des statistiques principales
+      // Appel principal GA4
       const [res] = await analyticsDataClient.runReport({
         property: `properties/${site.ga4_property_id}`,
         dateRanges: [{ startDate: "1daysAgo", endDate: "today" }],
@@ -58,13 +59,31 @@ async function collect() {
       const engagementRate = parseFloat(rows[4]?.value ?? 0);
       const bounceRate = 1 - engagementRate;
 
-      // Récupération des dimensions secondaires
+      // Dimensions secondaires
       const topDevice = await getTopValue(
         site.ga4_property_id,
         "deviceCategory"
       );
       const topCountry = await getTopValue(site.ga4_property_id, "country");
 
+      // Données temporelles
+      const date = new Date();
+      const year = date.getUTCFullYear();
+      const month = date.getUTCMonth() + 1;
+      const day = date.getUTCDate();
+      const quarter = Math.floor((month - 1) / 3) + 1;
+
+      const getWeek = (d) => {
+        d = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
+        const dayNum = d.getUTCDay() || 7;
+        d.setUTCDate(d.getUTCDate() + 4 - dayNum);
+        const yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
+        return Math.ceil(((d - yearStart) / 86400000 + 1) / 7);
+      };
+
+      const week = getWeek(date);
+
+      // Insertion
       const dataToInsert = {
         site_id: site.id,
         snapshot_date: new Date().toISOString().slice(0, 10),
@@ -76,6 +95,11 @@ async function collect() {
         bounce_rate: bounceRate,
         top_device: topDevice,
         top_country: topCountry,
+        year,
+        month,
+        quarter,
+        week,
+        day,
       };
 
       console.log("📦 Données envoyées à Supabase :", dataToInsert);
