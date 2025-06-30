@@ -26,7 +26,105 @@ async function getTopValue(propertyId, dimensionName) {
   return res.rows?.[0]?.dimensionValues?.[0]?.value ?? null;
 }
 
-// Fonction exportée
+// NOUVELLE FONCTION : Collecter les performances par page
+async function collectPagePerformance(propertyId, siteId) {
+  try {
+    const [res] = await analyticsDataClient.runReport({
+      property: `properties/${propertyId}`,
+      dateRanges: [{ startDate: "1daysAgo", endDate: "today" }],
+      dimensions: [{ name: "pagePath" }, { name: "pageTitle" }],
+      metrics: [
+        { name: "screenPageViews" },
+        { name: "averageSessionDuration" },
+        { name: "bounceRate" },
+        { name: "entrances" },
+      ],
+      limit: 20, // Top 20 pages
+      orderBys: [{ metric: { metricName: "screenPageViews" }, desc: true }],
+    });
+
+    if (res.rows && res.rows.length > 0) {
+      console.log(`📄 Collecte de ${res.rows.length} pages pour ${siteId}`);
+
+      for (const row of res.rows) {
+        const pagePath = row.dimensionValues[0]?.value || "";
+        const pageTitle = row.dimensionValues[1]?.value || "";
+        const pageviews = parseInt(row.metricValues[0]?.value || 0);
+        const avgTime = parseFloat(row.metricValues[1]?.value || 0);
+        const bounceRate = parseFloat(row.metricValues[2]?.value || 0);
+        const entrances = parseInt(row.metricValues[3]?.value || 0);
+
+        // Skip pages système Webflow
+        if (pagePath.includes("/admin") || pagePath.includes("/.well-known")) {
+          continue;
+        }
+
+        const pageData = {
+          site_id: siteId,
+          page_path: pagePath,
+          page_title: pageTitle,
+          pageviews: pageviews,
+          avg_time_on_page: avgTime,
+          bounce_rate: bounceRate,
+          entrance_rate: pageviews > 0 ? entrances / pageviews : 0,
+          date: new Date().toISOString().slice(0, 10),
+        };
+
+        // Insérer dans la table page_performance
+        const { error: pageError } = await supabase
+          .from("page_performance")
+          .upsert(pageData, {
+            onConflict: ["site_id", "page_path", "date"],
+          });
+
+        if (pageError) {
+          console.error("❌ Erreur page_performance :", pageError.message);
+        }
+      }
+      console.log(`✅ Page performance collectée pour site ${siteId}`);
+    } else {
+      console.log(`⚠️ Aucune page trouvée pour ${siteId}`);
+    }
+  } catch (err) {
+    console.error("❌ Erreur collectPagePerformance :", err.message);
+  }
+}
+
+// NOUVELLE FONCTION : Collecter les sources de trafic
+async function collectTrafficSources(propertyId, siteId) {
+  try {
+    const [res] = await analyticsDataClient.runReport({
+      property: `properties/${propertyId}`,
+      dateRanges: [{ startDate: "1daysAgo", endDate: "today" }],
+      dimensions: [
+        { name: "sessionDefaultChannelGrouping" },
+        { name: "sessionSource" },
+      ],
+      metrics: [{ name: "sessions" }, { name: "newUsers" }],
+      limit: 10,
+      orderBys: [{ metric: { metricName: "sessions" }, desc: true }],
+    });
+
+    const trafficData = [];
+    if (res.rows) {
+      for (const row of res.rows) {
+        trafficData.push({
+          channel: row.dimensionValues[0]?.value || "Unknown",
+          source: row.dimensionValues[1]?.value || "Unknown",
+          sessions: parseInt(row.metricValues[0]?.value || 0),
+          newUsers: parseInt(row.metricValues[1]?.value || 0),
+        });
+      }
+    }
+
+    return trafficData;
+  } catch (err) {
+    console.error("❌ Erreur collectTrafficSources :", err.message);
+    return [];
+  }
+}
+
+// Fonction exportée principale
 export default async function collectGa4() {
   const { data: sites, error } = await supabase.from("sites").select("*");
   if (error) {
@@ -38,6 +136,9 @@ export default async function collectGa4() {
 
   for (const site of sites) {
     try {
+      console.log(`🔍 Analyse du site : ${site.name}`);
+
+      // 1. COLLECTE PRINCIPALE (votre code existant)
       const [res] = await analyticsDataClient.runReport({
         property: `properties/${site.ga4_property_id}`,
         dateRanges: [{ startDate: "1daysAgo", endDate: "today" }],
@@ -47,6 +148,7 @@ export default async function collectGa4() {
           { name: "screenPageViews" },
           { name: "averageSessionDuration" },
           { name: "engagementRate" },
+          { name: "newUsers" }, // NOUVELLE MÉTRIQUE
         ],
       });
 
@@ -56,14 +158,21 @@ export default async function collectGa4() {
       const pageviews = parseInt(rows[2]?.value ?? 0);
       const avgSessionDuration = parseFloat(rows[3]?.value ?? 0);
       const engagementRate = parseFloat(rows[4]?.value ?? 0);
+      const newUsers = parseInt(rows[5]?.value ?? 0); // NOUVELLE MÉTRIQUE
       const bounceRate = 1 - engagementRate;
 
+      // 2. DONNÉES CONTEXTUELLES
       const topDevice = await getTopValue(
         site.ga4_property_id,
         "deviceCategory"
       );
       const topCountry = await getTopValue(site.ga4_property_id, "country");
+      const trafficSources = await collectTrafficSources(
+        site.ga4_property_id,
+        site.id
+      );
 
+      // 3. CALCULS TEMPORELS (votre code existant)
       const date = new Date();
       const year = date.getUTCFullYear();
       const month = date.getUTCMonth() + 1;
@@ -80,6 +189,7 @@ export default async function collectGa4() {
 
       const week = getWeek(date);
 
+      // 4. DONNÉES ENRICHIES POUR IA
       const dataToInsert = {
         site_id: site.id,
         snapshot_date: new Date().toISOString().slice(0, 10),
@@ -91,6 +201,8 @@ export default async function collectGa4() {
         bounce_rate: bounceRate,
         top_device: topDevice,
         top_country: topCountry,
+        new_users: newUsers, // NOUVEAU CHAMP à ajouter dans ga4_snapshots
+        traffic_sources: JSON.stringify(trafficSources), // NOUVEAU CHAMP
         year,
         month,
         quarter,
@@ -99,8 +211,9 @@ export default async function collectGa4() {
         scope: "daily",
       };
 
-      console.log("📦 Données envoyées à Supabase :", dataToInsert);
+      console.log("📦 Données principales collectées");
 
+      // 5. INSERTION DONNÉES PRINCIPALES
       const { error: insertError } = await supabase
         .from("ga4_snapshots")
         .upsert(dataToInsert, {
@@ -109,14 +222,24 @@ export default async function collectGa4() {
 
       if (insertError) {
         console.error(
-          "❌ Erreur lors de l’insertion Supabase :",
+          "❌ Erreur insertion ga4_snapshots :",
           insertError.message
         );
       } else {
-        console.log(`✅ Stats enregistrées pour ${site.name}`);
+        console.log(`✅ Stats principales enregistrées pour ${site.name}`);
       }
+
+      // 6. NOUVELLE COLLECTE : PAGES
+      if (site.ai_enabled !== false) {
+        // Si l'IA est activée pour ce site
+        await collectPagePerformance(site.ga4_property_id, site.id);
+      }
+
+      console.log(`🎉 Collecte complète terminée pour ${site.name}\n`);
     } catch (err) {
       console.error(`❌ Erreur GA4 pour ${site.name} :`, err.message);
     }
   }
+
+  console.log("🏁 Collecte GA4 terminée pour tous les sites !");
 }
